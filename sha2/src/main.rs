@@ -1,3 +1,5 @@
+// output is dependent upon every bit in the input, cant reverse it
+
 // Convert input to 32-bit
 
 // Order the input to 32 bit (0x00000000) rows
@@ -21,8 +23,7 @@
 use core::default::Default;
 const BUFFER_SIZE: usize = 1024 * 16;
 use std::env;
-use std::io::{stdin, Read};
-use std::fs::File;
+use std::io::{Read, Cursor};
 
 // These values were obtained by taking the first 32 bits of the fractional
 // parts of the square roots of the first 8 prime numbers.
@@ -41,20 +42,34 @@ const H: [u32; 8] = [
 // These values were obtained by taking the first 32 bits of the fractional
 // parts of the cube roots of the first 64 prime numbers. Same as above but cube roots.
 const K: [u32; 64] = [
-    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 
+    0xe9b5dba5, 0x3956c25b, 0x59f111f1, 
+    0x923f82a4, 0xab1c5ed5, 0xd807aa98, 
+    0x12835b01, 0x243185be, 0x550c7dc3, 
+    0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 
+    0xc19bf174, 0xe49b69c1, 0xefbe4786, 
+    0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 
+    0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 
+    0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 
+    0x06ca6351, 0x14292967, 0x27b70a85, 
+    0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 
+    0x650a7354, 0x766a0abb, 0x81c2c92e, 
+    0x92722c85, 0xa2bfe8a1, 0xa81a664b, 
+    0xc24b8b70, 0xc76c51a3, 0xd192e819, 
+    0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 
+    0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 
+    0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 
+    0x78a5636f, 0x84c87814, 0x8cc70208, 
+    0x90befffa, 0xa4506ceb, 0xbef9a3f7, 
+    0xc67178f2
 ];
 
 pub struct Sha256 {
     state: [u32; 8],
     remaining: [u8; 64], // Storage for blocks not yet processed
-    num_remaining: usize, // Nunmber of remaining 512 bit blocks
+    num_remaining: usize, // Number of remaining 512 bit blocks
     completed_data_blocks: u64, // Number of completed 512 bit data block
 }
 
@@ -83,7 +98,7 @@ impl Sha256 {
         // Message Scheduling Array Initialization
 
         // Grabs first 16 W values for this block
-        let mut w = [0; 64]; //Initialize an array of 64 zeros. Note that 64/4 = 16, 16 W values.
+        let mut w = [0; 64]; //Initialize an array of 64 zeros.
         for (w, d) in w.iter_mut().zip(data.iter().step_by(4)).take(16) {
             *w = u32::from_be_bytes(unsafe { *(d as *const u8 as *const [u8; 4]) });
         }
@@ -91,11 +106,13 @@ impl Sha256 {
         // Set remainder of W values
         for i in 16..64 {
 
-            // Sigma_0(x: u32) -> right rotate x by 7, right rotate x by 18, shift x 3 right, then bitwise
+            // W_i = (W_i-16 + W_i-7 + Sigma_0(W_i-15) + Sigma_1(W_i-2)) % 2^32
+
+            // Sigma_0(x: u32) -> right rotate x by 7, right rotate x by 18, shift x 3 right, then bitwise XOR
             // add by digits and mod 2. Note that XOR is the same as mod 2 operation.
             let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
 
-            // Sigma_1(x: u32) -> right rotate x by 17, right rotate x by 19, shift x 10 right, then bitwise
+            // Sigma_1(x: u32) -> right rotate x by 17, right rotate x by 19, shift x 10 right, then bitwise XOR
             // add by digits and mod 2. Note that XOR is the same as mod 2 operation.
             let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
 
@@ -107,13 +124,6 @@ impl Sha256 {
         // Initalize h with our current state values, which remember changes per block
         let mut h = *state;
         for i in 0..64 {
-            // Ch(e, f, g) -> for every bit, if the bit of e is 0, take the bit of g as output,
-            // if the bit of e is one, take the bit of f as output
-            let ch = (h[4] & h[5]) ^ (!h[4] & h[6]);
-
-            // Ma(a, b, c) -> Simply take majority of 0 or 1 by bit.
-            let ma = (h[0] & h[1]) ^ (h[0] & h[2]) ^ (h[1] & h[2]);
-
             // Note this is a different sigma function than before, there is no right shift only right rotations now
             // Sigma_0(a) -> right rotate x by 7, right rotate x by 18, shift x 3 right, then bitwise
             // add by digits and mod 2. Note that XOR is the same as mod 2 operation.
@@ -123,6 +133,13 @@ impl Sha256 {
             // Sigma_1(e) -> right rotate x by 7, right rotate x by 18, shift x 3 right, then bitwise
             // add by digits and mod 2. Note that XOR is the same as mod 2 operation.
             let s1 = h[4].rotate_right(6) ^ h[4].rotate_right(11) ^ h[4].rotate_right(25);
+
+            // Ch(e, f, g) -> for every bit, if the bit of e is 0, take the bit of g as output,
+            // if the bit of e is one, take the bit of f as output
+            let ch = (h[4] & h[5]) ^ (!h[4] & h[6]);
+
+            // Ma(a, b, c) -> Simply take majority of 0 or 1 by bit.
+            let ma = (h[0] & h[1]) ^ (h[0] & h[2]) ^ (h[1] & h[2]);
 
             // t0 = (h + Sigma_1(e) + Ch(e, f, g) + K_0 + W_0) % 2^32 (aka wrap add)
             let t0 = h[7]
@@ -161,10 +178,14 @@ impl Sha256 {
 
     // Update the hash after clearing one 512 bit data block
     pub fn update(&mut self, data: &[u8]) {
+        //Get size of the data
         let mut len = data.len();
         let mut offset = 0;
 
+        // Check if we have a block >= 512 remaining, note that 64 * 8 (datatype for data parameter) = 512
         if self.num_remaining > 0 && self.num_remaining + len >= 64 {
+            // Copy &data[..64 - self.num_remaining] into self.remaining[self.num_remaining..]
+            // Essentially fill the remaining buffer with 512 bits if possible.
             self.remaining[self.num_remaining..].copy_from_slice(&data[..64 - self.num_remaining]);
             Self::update_state(&mut self.state, &self.remaining);
             self.completed_data_blocks += 1;
@@ -173,7 +194,9 @@ impl Sha256 {
             self.num_remaining = 0;
         }
 
+        // Get remaining amount of full 512 (64 byte) blocks
         let data_blocks = len / 64;
+        // Get the remainider of grouping by 1=512
         let remain = len % 64;
         for _ in 0..data_blocks {
             Self::update_state(&mut self.state, unsafe {
@@ -183,6 +206,7 @@ impl Sha256 {
         }
         self.completed_data_blocks += data_blocks as u64;
 
+        // Place any remaining data into the remaining buffer
         if remain > 0 {
             self.remaining[self.num_remaining..self.num_remaining + remain]
                 .copy_from_slice(&data[offset..]);
@@ -190,15 +214,16 @@ impl Sha256 {
         }
     }
 
-    // Clean up anda return the
+    // Clean up and finish hashing the remaining data after grouping by 512 bits
     pub fn finish(mut self) -> [u8; 32] {
         let data_bits = self.completed_data_blocks * 512 + self.num_remaining as u64 * 8;
-        let mut remaining = [0u8; 72];
+        let mut remaining = [0u8; 72]; // Add one extra byte for padding/length
         remaining[0] = 128;
 
+        // If we have less than 56 bytes remaning pad up to 56 bytes (64 - 8)
         let offset = if self.num_remaining < 56 {
             56 - self.num_remaining
-        } else {
+        } else { // Otherwise if we have 56 or more bytes,
             120 - self.num_remaining
         };
 
@@ -210,54 +235,36 @@ impl Sha256 {
         }
         unsafe { *(self.state.as_ptr() as *const [u8; 32]) }
     }
-
-    pub fn digest(data: &[u8]) -> [u8; 32] {
-        let mut sha256 = Self::default();
-        sha256.update(data);
-        sha256.finish()
-    }
-
-    pub fn state(&self) -> [u32; 8] {
-        self.state
-    }
 }
 
 // ------------------------ Driver Code ------------------------ //
 
-fn print_result(sum: &[u8], name: &str) {
+fn sha256<R: Read>(r: &mut R) -> [u8; 32] {
+
+    let mut buffer = Vec::with_capacity(BUFFER_SIZE);
+    unsafe { buffer.set_len(BUFFER_SIZE); }
+    let mut sha: Sha256 = Sha256::default();
+    let mut n: usize;
+    while {
+        n = r.read(buffer.as_mut()).unwrap();
+        n > 0
+    } { sha.update(&buffer[..n]); }
+    sha.finish()
+}
+
+fn print_hashed_msg(sum: &[u8]) {
     for b in sum {
         print!("{:02x}", b);
     }
-    println!("  {}", name);
-}
-
-fn sha256sum<R: Read>(r: &mut R) -> [u8; 32] {
-    let mut sha256 = Sha256::default();
-
-    let mut buf = Vec::with_capacity(BUFFER_SIZE);
-    unsafe {
-        buf.set_len(BUFFER_SIZE);
-    }
-
-    let mut n;
-    while {
-        n = r.read(buf.as_mut()).unwrap();
-        n > 0
-    } {
-        sha256.update(&buf[..n]);
-    }
-
-    sha256.finish()
 }
 
 fn main() {
-    let args = env::args();
-
-    if args.len() > 1 {
-        for path in args.skip(1) {
-            print_result(&sha256sum(&mut File::open(&path).unwrap()), &path);
-        }
+    let args: Vec<String> = env::args().collect();
+    if args.len() == 2 {
+        let message: &String = &args[1];
+        let mut cursor: Cursor<&[u8]> = Cursor::new(message.as_bytes());
+        print_hashed_msg(&sha256(&mut cursor));
     } else {
-        print_result(&sha256sum(&mut stdin().lock()), "-");
+        println!("Usage: cargo run message_to_hash")
     }
 }
